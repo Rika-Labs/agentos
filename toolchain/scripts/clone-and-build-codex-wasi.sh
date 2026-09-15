@@ -170,17 +170,43 @@ open(p, 'w').write(s)
 PY
 fi
 
-# --- 4b. re-resolve + re-pin tokio: its [patch.crates-io] line was dropped
-# above so the vendored+patched tree supplies it. The shipped Cargo.lock
-# records tokio under the dropped git-patch source, which `-p tokio` cannot
-# match — so regenerate a consistent lockfile first, then downgrade tokio to
-# the exact version the std-patches/crates/tokio patches were written
-# against. Without the pin, `cargo vendor` floats tokio to the newest
-# compatible release and the vendored wasi.rs companion stops compiling.
-echo "== re-resolving workspace lockfile and re-pinning tokio =="
-cargo "+$TOOLCHAIN" generate-lockfile --manifest-path "$WORKSPACE/Cargo.toml"
-cargo "+$TOOLCHAIN" update --manifest-path "$WORKSPACE/Cargo.toml" \
-	-p tokio --precise 1.52.3
+# --- 4b. re-pin tokio in Cargo.lock: its [patch.crates-io] line was dropped
+# above so the vendored+patched tree supplies it. The shipped lockfile records
+# tokio as a path dep (no source/checksum), which `-p tokio` cannot match and
+# which the rewritten manifest invalidates — so `cargo vendor` would re-resolve
+# tokio to the newest compatible release and the vendored wasi.rs companion
+# would stop compiling. Editing the stanza in place (registry source + checksum
+# for the pinned version) keeps every other locked pin intact — a wholesale
+# `generate-lockfile` floats the whole graph and breaks unification elsewhere
+# (e.g. starlark_map's hashbrown vs allocative's).
+python3 - "$WORKSPACE/Cargo.lock" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+m = re.search(r'\[\[package\]\]\nname = "tokio"\nversion = "([^"]+)"\n', s)
+if not m:
+    raise SystemExit("ERROR: no tokio stanza in Cargo.lock")
+if m.group(1) != "1.52.3":
+    raise SystemExit(
+        f'ERROR: Cargo.lock pins tokio {m.group(1)}, expected 1.52.3 '
+        '(the std-patches/crates/tokio target); update the pin and patches together')
+stanza_end = s.find('[[package]]', m.end())
+stanza = s[m.start():stanza_end if stanza_end != -1 else len(s)]
+if 'source = "registry+' not in stanza:
+    # Path-sourced entry from the dropped patch: give it the crates.io source
+    # and checksum for the pinned release.
+    stanza = stanza.replace(
+        'version = "1.52.3"\n',
+        'version = "1.52.3"\n'
+        'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+        'checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"\n',
+        1,
+    )
+    open(p, 'w').write(s[:m.start()] + stanza + s[stanza_end if stanza_end != -1 else len(s):])
+    print("   pinned tokio 1.52.3 to crates.io in Cargo.lock")
+else:
+    print("   tokio already registry-pinned at 1.52.3")
+PY
 
 # --- 5. vendor the workspace (+ std deps) and apply crate patches ------------
 RUST_STD_SRC="$(rustc "+$TOOLCHAIN" --print sysroot)/lib/rustlib/src/rust"
