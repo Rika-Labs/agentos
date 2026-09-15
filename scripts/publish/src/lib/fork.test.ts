@@ -5,6 +5,7 @@ import {
 	mkdtempSync,
 	mkdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -120,7 +121,9 @@ test("packs a disposable installable resolver fixture after lifecycle scripts ru
 			["-p", "require(process.argv[1])", join(extracted, "package")],
 			{ encoding: "utf8" },
 		).trim(),
-		join(platform, "agentos-native-sidecar"),
+		// require.resolve reports the realpath'd target (macOS /var ->
+		// /private/var), so compare against the resolved expected path.
+		realpathSync(join(platform, "agentos-native-sidecar")),
 	);
 });
 

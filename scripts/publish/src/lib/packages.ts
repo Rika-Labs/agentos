@@ -9,7 +9,13 @@
  * before anyone installs the meta.
  */
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+	existsSync,
+	readFileSync,
+	readdirSync,
+	realpathSync,
+	statSync,
+} from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 export interface Package {
@@ -130,6 +136,10 @@ export function discoverPackages(
 	const packages: Package[] = [];
 	const seen = new Set<string>();
 	const platformPackageRoots = new Set<string>();
+	// `pnpm -r list` reports realpath'd paths (e.g. macOS /var -> /private/var),
+	// so resolving relDir against the caller's repoRoot spelling can produce a
+	// path that climbs out of the repo. Realpath both sides before relativizing.
+	const realRepoRoot = realpathSync(repoRoot);
 
 	const add = (dir: string) => {
 		const absDir = resolve(dir);
@@ -142,7 +152,7 @@ export function discoverPackages(
 		packages.push({
 			name: pkg.name,
 			dir: absDir,
-			relDir: relative(repoRoot, absDir),
+			relDir: relative(realRepoRoot, realpathSync(absDir)),
 		});
 	};
 
