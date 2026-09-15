@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverPackages } from "./packages.js";
+import { discoverPackages, type Package } from "./packages.js";
 
 const SOURCE_AGENTOS_SCOPE = "@rivet-dev/agentos";
 const RELEASE_AGENTOS_SCOPE = "@rikalabs/agentos";
@@ -17,6 +17,7 @@ const LOCKSTEP_SOFTWARE = new Map([
 	["@agentos-software/common", "@rikalabs/agentos-software-common"],
 	["@agentos-software/apps-builder", "@rikalabs/agentos-software-apps-builder"],
 	["@agentos-software/sh", "@rikalabs/agentos-software-sh"],
+	["@agentos-software/manifest", "@rikalabs/agentos-software-manifest"],
 ]);
 
 export function releasePackageName(name: string): string {
@@ -36,8 +37,22 @@ export function releasePayloadText(source: string): string {
 	);
 }
 
+/**
+ * The fork publishes only packages `releasePackageName` maps into `@rikalabs`.
+ * Independently-versioned `@agentos-software/*` packages that live outside
+ * `software/` (e.g. `packages/manifest`) stay on upstream's release track —
+ * their `workspace:*` specs pin to upstream's published `latest` at version
+ * bump time — so they must be excluded from the fork's pack/publish set rather
+ * than fail the all-`@rikalabs` assertion.
+ */
+export function rikaPackages(repoRoot: string): Package[] {
+	return discoverPackages(repoRoot).filter((pkg) =>
+		releasePackageName(pkg.name).startsWith("@rikalabs/"),
+	);
+}
+
 export function prepareRikaNpmPackages(repoRoot: string): number {
-	const packages = discoverPackages(repoRoot);
+	const packages = rikaPackages(repoRoot);
 	const outputDir = join(repoRoot, "target/rika-npm");
 	rmSync(outputDir, { recursive: true, force: true });
 	mkdirSync(outputDir, { recursive: true });
@@ -63,10 +78,13 @@ export function prepareRikaNpmPackage(
 	const staging = mkdtempSync(join(tmpdir(), "rika-pack-"));
 	try {
 		const original = JSON.parse(
-			execFileSync("npm", ["pack", "--json", "--pack-destination", staging], {
-				cwd: packageDir,
-				encoding: "utf8",
-			}),
+			execFileSync(
+				"npm",
+				// `--foreground-scripts=false` keeps lifecycle script stdout (e.g.
+				// `prepack` vendoring logs) out of the `--json` output stream.
+				["pack", "--json", "--foreground-scripts=false", "--pack-destination", staging],
+				{ cwd: packageDir, encoding: "utf8" },
+			),
 		)[0] as { filename: string; files: Array<{ path: string }> };
 		if (!original.filename || !original.files?.length)
 			throw new Error(`npm pack returned no artifact for ${packageDir}`);
@@ -105,7 +123,7 @@ export function assertRikaNpmPackages(
 	repoRoot: string,
 	outputDir = join(repoRoot, "target/rika-npm"),
 ): void {
-	const packages = discoverPackages(repoRoot).map((pkg) => ({
+	const packages = rikaPackages(repoRoot).map((pkg) => ({
 		...pkg,
 		name: releasePackageName(pkg.name),
 	}));
