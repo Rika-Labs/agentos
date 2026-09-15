@@ -71,7 +71,13 @@ agentos-protocol = { path = "../agentos-protocol", version = "0.2.0" }
 	}
 });
 
-test("bumpPackageJsons injects sidecar platform optional dependencies", async () => {
+test("bumpPackageJsons injects sidecar platform optional dependencies", async (t) => {
+	const previous = process.env.SIDECAR_PLATFORMS;
+	process.env.SIDECAR_PLATFORMS = DEFAULT_SIDECAR_PLATFORMS.join(" ");
+	t.after(() => {
+		if (previous === undefined) delete process.env.SIDECAR_PLATFORMS;
+		else process.env.SIDECAR_PLATFORMS = previous;
+	});
 	const repoRoot = await mkdtemp(join(tmpdir(), "agentos-version-test-"));
 	try {
 		await writeJson(repoRoot, "package.json", {
@@ -149,7 +155,6 @@ test("bumpPackageJsons injects sidecar platform optional dependencies", async ()
 				]).sort(),
 			),
 		);
-
 	} finally {
 		await rm(repoRoot, { recursive: true, force: true });
 	}
@@ -181,11 +186,10 @@ test("bumpPackageJsons pins lockstep and independent AgentOS Apps runtimes", asy
 			"@agentos-software/sh",
 			"@agentos-software/tar",
 		]) {
-			await writeJson(
-				repoRoot,
-				`software/${name.split("/")[1]}/package.json`,
-				{ name, version: "0.0.1" },
-			);
+			await writeJson(repoRoot, `software/${name.split("/")[1]}/package.json`, {
+				name,
+				version: "0.0.1",
+			});
 		}
 
 		await bumpPackageJsons(repoRoot, "0.0.0-preview.abc1234", {
@@ -197,10 +201,7 @@ test("bumpPackageJsons pins lockstep and independent AgentOS Apps runtimes", asy
 		});
 
 		const appsManifest = JSON.parse(
-			await readFile(
-				join(repoRoot, "packages/apps/package.json"),
-				"utf8",
-			),
+			await readFile(join(repoRoot, "packages/apps/package.json"), "utf8"),
 		);
 		assert.deepEqual(appsManifest.dependencies, {
 			"@agentos-software/apps-builder": "0.0.0-preview.abc1234",

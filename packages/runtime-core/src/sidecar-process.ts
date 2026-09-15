@@ -1,9 +1,9 @@
-import {
-	type LiveSidecarRequestPayload,
-	type LiveSidecarResponsePayload,
+import type {
+	LiveSidecarRequestPayload,
+	LiveSidecarResponsePayload,
 } from "./callbacks.js";
 import type { MountConfigJsonObject } from "./descriptors.js";
-import { type LiveSidecarEventSelector } from "./event-buffer.js";
+import type { LiveSidecarEventSelector } from "./event-buffer.js";
 import {
 	decodeGuestFilesystemContent,
 	encodeGuestFilesystemContent,
@@ -12,47 +12,51 @@ import {
 	type LiveRootFilesystemLowerDescriptor,
 } from "./filesystem.js";
 import type { CreateVmConfig } from "./generated/CreateVmConfig.js";
-import type { SidecarProcessTransport } from "./sidecar-client.js";
-import { type LiveOwnershipScope } from "./ownership.js";
-import {
-	type LiveFsPermissionRule,
-	type LivePatternPermissionRule,
-	type LivePermissionMode,
-	type LivePermissionScope,
-	type LivePermissionsPolicy,
-	type LiveRulePermissions,
+import type { LiveOwnershipScope } from "./ownership.js";
+import type {
+	LiveFsPermissionRule,
+	LivePatternPermissionRule,
+	LivePermissionMode,
+	LivePermissionScope,
+	LivePermissionsPolicy,
+	LiveRulePermissions,
 } from "./permissions.js";
-import { SIDECAR_PROTOCOL_SCHEMA } from "./protocol-schema.js";
+import type {
+	LiveEventFrame,
+	LiveRequestFrame,
+	LiveResponseFrame,
+	LiveSidecarRequestFrame,
+	LiveSidecarRequestHandler,
+	LiveSidecarResponseFrame,
+	ProtocolFramePayloadCodec,
+} from "./protocol-frames.js";
 import type {
 	LiveFilesystemOperation,
 	LiveGuestRuntimeKind,
 	LiveWasmPermissionTier,
 } from "./protocol-maps.js";
-import {
-	type LiveEventFrame,
-	type LiveSidecarRequestHandler,
-	type LiveRequestFrame,
-	type LiveResponseFrame,
-	type LiveSidecarRequestFrame,
-	type LiveSidecarResponseFrame,
-	type ProtocolFramePayloadCodec,
-} from "./protocol-frames.js";
-import { type LiveRequestPayload } from "./request-payloads.js";
+import { SIDECAR_PROTOCOL_SCHEMA } from "./protocol-schema.js";
+import type { LiveRequestPayload } from "./request-payloads.js";
 import type {
 	LiveGuestDirEntry,
 	LiveResponsePayload,
 } from "./response-payloads.js";
-import {
-	type LiveGuestFilesystemStat,
-	type LiveProcessSnapshotEntry,
-	type LiveSocketStateEntry,
+import type {
+	SidecarProcessTransport,
+	SidecarTerminationResult,
+} from "./sidecar-client.js";
+import type {
+	LiveGuestFilesystemStat,
+	LiveProcessSnapshotEntry,
+	LiveSocketStateEntry,
 } from "./state.js";
+
+export { SidecarEventBufferOverflow } from "./event-buffer.js";
 export {
 	SidecarProcessError,
 	SidecarProcessExited,
 	SidecarSilenceTimeout,
 } from "./sidecar-errors.js";
-export { SidecarEventBufferOverflow } from "./event-buffer.js";
 // `Sidecar` is the public name for the native sidecar process client. The class
 // is `SidecarProcess` internally; consumers import it as `Sidecar` via the
 // `@rivet-dev/agentos-runtime-core/sidecar-client` subpath and the package root.
@@ -1723,6 +1727,15 @@ export class SidecarProcess {
 			payload,
 		});
 		return response.payload;
+	}
+
+	async terminate(): Promise<SidecarTerminationResult> {
+		if (!this.protocolClient.terminate) {
+			throw new Error(
+				"transport does not support confirmed native termination",
+			);
+		}
+		return this.protocolClient.terminate();
 	}
 
 	async dispose(): Promise<void> {

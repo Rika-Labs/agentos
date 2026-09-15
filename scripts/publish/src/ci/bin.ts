@@ -16,16 +16,14 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { $ } from "execa";
-import {
-	releaseArtifactPrefix,
-	releaseUserAgent,
-} from "../lib/artifacts.js";
+import { releaseArtifactPrefix, releaseUserAgent } from "../lib/artifacts.js";
 import {
 	resolveContext,
 	writeContextToGithubOutput,
 	type Trigger,
 } from "../lib/context.js";
 import { createGhRelease, tagAndPush } from "../lib/git.js";
+import { assertRikaNpmPackages, prepareRikaNpmPackages } from "../lib/fork.js";
 import { scoped } from "../lib/logger.js";
 import { publishAll } from "../lib/npm.js";
 import { copyPrefix, uploadDir } from "../lib/r2.js";
@@ -48,7 +46,10 @@ function findRepoRoot(): string {
 	throw new Error("could not locate repo root");
 }
 
-async function crateVersionExists(name: string, version: string): Promise<boolean> {
+async function crateVersionExists(
+	name: string,
+	version: string,
+): Promise<boolean> {
 	const response = await fetch(
 		`https://crates.io/api/v1/crates/${encodeURIComponent(name)}/${encodeURIComponent(version)}`,
 		{
@@ -74,7 +75,9 @@ async function waitForCrateVersion(
 		if (await crateVersionExists(name, version)) return;
 		await sleep(10_000);
 	}
-	throw new Error(`timed out waiting for crates.io to index ${name}@${version}`);
+	throw new Error(
+		`timed out waiting for crates.io to index ${name}@${version}`,
+	);
 }
 
 async function cargoPublishWithRateLimitRetry(
@@ -93,11 +96,15 @@ async function cargoPublishWithRateLimitRetry(
 
 		const retryAt = parseCratesIoRateLimitRetry(result.all ?? "");
 		if (retryAt === undefined) {
-			throw new Error(`cargo ${args.join(" ")} failed with exit code ${result.exitCode}`);
+			throw new Error(
+				`cargo ${args.join(" ")} failed with exit code ${result.exitCode}`,
+			);
 		}
 
 		const waitMs = Math.max(retryAt.getTime() - Date.now() + 5_000, 10_000);
-		log.info(`crates.io rate limited publish; retrying at ${retryAt.toISOString()}`);
+		log.info(
+			`crates.io rate limited publish; retrying at ${retryAt.toISOString()}`,
+		);
 		await sleep(waitMs);
 	}
 }
@@ -141,8 +148,13 @@ program
 // ---------------------------------------------------------------------------
 program
 	.command("bump-versions")
-	.description("Rewrite every publishable package.json and Cargo.toml to the given version")
-	.option("--version <version>", "Version to write (defaults to resolved context)")
+	.description(
+		"Rewrite every publishable package.json and Cargo.toml to the given version",
+	)
+	.option(
+		"--version <version>",
+		"Version to write (defaults to resolved context)",
+	)
 	.option(
 		"--version-only",
 		"Only rewrite version fields without publish-time dependency injection",
@@ -168,6 +180,23 @@ program
 // publish-npm — parallel npm publish with retries
 // ---------------------------------------------------------------------------
 program
+	.command("prepare-rika-npm")
+	.description(
+		"Rewrite built npm payloads from upstream names to the @rikalabs release namespace",
+	)
+	.action(() => {
+		const count = prepareRikaNpmPackages(findRepoRoot());
+		log.info(`prepared and verified ${count} @rikalabs npm packages`);
+	});
+
+program
+	.command("verify-rika-npm")
+	.description(
+		"Fail unless every publish payload is entirely in the @rikalabs namespace",
+	)
+	.action(() => assertRikaNpmPackages(findRepoRoot()));
+
+program
 	.command("publish-npm")
 	.description("Publish all discovered packages to npm")
 	.option("--tag <tag>", "npm dist-tag (defaults to resolved context)")
@@ -175,6 +204,7 @@ program
 	.option("--retries <n>", "Retries per package", "3")
 	.option("--release-mode", "Fail if every package is already published")
 	.option("--dry-run", "Pass --dry-run to npm publish (publishes nothing)")
+	.option("--expected-scope <scope>", "Refuse packages outside this npm scope")
 	.action(async (opts) => {
 		const repoRoot = findRepoRoot();
 		let tag: string = opts.tag;
@@ -192,6 +222,7 @@ program
 			retries: Number(opts.retries),
 			releaseMode,
 			dryRun: !!opts.dryRun,
+			expectedScope: opts.expectedScope,
 		});
 	});
 
@@ -201,8 +232,15 @@ program
 program
 	.command("publish-crates")
 	.description("Publish Rust crates to crates.io in dependency order")
-	.option("--version <version>", "Version to publish (defaults to resolved context)")
-	.option("--wait-seconds <n>", "Max wait for crates.io indexing per crate", "600")
+	.option(
+		"--version <version>",
+		"Version to publish (defaults to resolved context)",
+	)
+	.option(
+		"--wait-seconds <n>",
+		"Max wait for crates.io indexing per crate",
+		"600",
+	)
 	.option("--dry-run", "Run cargo publish --dry-run for the first crate only")
 	.option("--allow-dirty", "Pass --allow-dirty to cargo publish")
 	.action(async (opts) => {
@@ -269,14 +307,21 @@ program
 	.command("copy-r2")
 	.description("Copy R2 artifacts from {sha} to {version} (+latest)")
 	.option("--sha <sha>", "Source sha (defaults to resolved context)")
-	.option("--version <version>", "Target version (defaults to resolved context)")
-	.option("--latest <bool>", "Also copy to /latest/ (defaults to resolved context)")
+	.option(
+		"--version <version>",
+		"Target version (defaults to resolved context)",
+	)
+	.option(
+		"--latest <bool>",
+		"Also copy to /latest/ (defaults to resolved context)",
+	)
 	.option("--name <name>", "R2 sub-path name", "sidecar")
 	.action(async (opts) => {
 		const ctx = await resolveContext();
 		const sha: string = opts.sha ?? ctx.sha;
 		const version: string = opts.version ?? ctx.version;
-		const latest = opts.latest !== undefined ? opts.latest === "true" : ctx.latest;
+		const latest =
+			opts.latest !== undefined ? opts.latest === "true" : ctx.latest;
 		const source = releaseArtifactPrefix({ ref: sha, name: opts.name });
 		await copyPrefix(
 			source,

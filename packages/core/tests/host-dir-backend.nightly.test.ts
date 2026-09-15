@@ -4,9 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { AgentOs, createHostDirBackend } from "../src/index.js";
-import {
-	REGISTRY_SOFTWARE,
-} from "./helpers/registry-commands.js";
+import { REGISTRY_SOFTWARE } from "./helpers/registry-commands.js";
 
 describe("host_dir native mount integration", () => {
 	let vm: AgentOs;
@@ -55,18 +53,18 @@ describe("host_dir native mount integration", () => {
 	});
 
 	test("mounted host directory is readable from guest exec", async () => {
-			vm = await AgentOs.create({
-				software: REGISTRY_SOFTWARE,
-				mounts: [
-					{
-						path: "/hostmnt",
-						plugin: createHostDirBackend({ hostPath: tmpDir }),
-					},
-				],
-			});
-			const result = await vm.exec("cat /hostmnt/hello.txt");
-			expect(result.exitCode).toBe(0);
-			expect(result.stdout).toContain("hello from host");
+		vm = await AgentOs.create({
+			software: REGISTRY_SOFTWARE,
+			mounts: [
+				{
+					path: "/hostmnt",
+					plugin: createHostDirBackend({ hostPath: tmpDir }),
+				},
+			],
+		});
+		const result = await vm.exec("cat /hostmnt/hello.txt");
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("hello from host");
 	});
 
 	test("symlink escape attempt is blocked", async () => {
@@ -114,6 +112,35 @@ describe("host_dir native mount integration", () => {
 		// Verify on host
 		const content = fs.readFileSync(path.join(tmpDir, "writable.txt"), "utf-8");
 		expect(content).toBe("written from VM");
+	});
+
+	test("exclusive writes preserve mode and clean temporary links on a writable mount", async () => {
+		vm = await AgentOs.create({
+			mounts: [
+				{
+					path: "/hostmnt",
+					plugin: createHostDirBackend({ hostPath: tmpDir, readOnly: false }),
+				},
+			],
+		});
+		await vm.filesystem.writeFile("/hostmnt/private.txt", "private", {
+			flag: "wx",
+			mode: 0o600,
+		});
+		expect(fs.statSync(path.join(tmpDir, "private.txt")).mode & 0o777).toBe(
+			0o600,
+		);
+		await expect(
+			vm.filesystem.writeFile("/hostmnt/private.txt", "replacement", {
+				exclusive: true,
+			}),
+		).rejects.toThrow();
+		expect(fs.readFileSync(path.join(tmpDir, "private.txt"), "utf8")).toBe(
+			"private",
+		);
+		expect(
+			fs.readdirSync(tmpDir).filter((name) => name.startsWith(".private.txt.")),
+		).toEqual([]);
 	});
 
 	test("rename and delete update the host directory when writable", async () => {
