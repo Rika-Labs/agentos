@@ -191,9 +191,8 @@ jobs:
         run: pnpm --filter=publish exec tsx src/ci/bin.ts prepare-rika-npm
       - name: Install staged release into a clean application
         run: |
-          mkdir -p "$RUNNER_TEMP/agentos-installed"
+          node scripts/publish/src/ci/install-staged-app.mjs "$GITHUB_WORKSPACE/target/rika-npm" "$RUNNER_TEMP/agentos-installed"
           cp scripts/publish/src/ci/runtime-smoke.mjs "$RUNNER_TEMP/agentos-installed/runtime-smoke.mjs"
-          npm --prefix "$RUNNER_TEMP/agentos-installed" install --no-audit --no-fund --package-lock=false "$GITHUB_WORKSPACE"/target/rika-npm/*.tgz
       - name: Exercise installed packages with platform binary resolution
         working-directory: ${{ runner.temp }}/agentos-installed
         run: |
