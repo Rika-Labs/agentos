@@ -170,6 +170,18 @@ open(p, 'w').write(s)
 PY
 fi
 
+# --- 4b. re-resolve + re-pin tokio: its [patch.crates-io] line was dropped
+# above so the vendored+patched tree supplies it. The shipped Cargo.lock
+# records tokio under the dropped git-patch source, which `-p tokio` cannot
+# match — so regenerate a consistent lockfile first, then downgrade tokio to
+# the exact version the std-patches/crates/tokio patches were written
+# against. Without the pin, `cargo vendor` floats tokio to the newest
+# compatible release and the vendored wasi.rs companion stops compiling.
+echo "== re-resolving workspace lockfile and re-pinning tokio =="
+cargo "+$TOOLCHAIN" generate-lockfile --manifest-path "$WORKSPACE/Cargo.toml"
+cargo "+$TOOLCHAIN" update --manifest-path "$WORKSPACE/Cargo.toml" \
+	-p tokio --precise 1.52.3
+
 # --- 5. vendor the workspace (+ std deps) and apply crate patches ------------
 RUST_STD_SRC="$(rustc "+$TOOLCHAIN" --print sysroot)/lib/rustlib/src/rust"
 [ -d "$RUST_STD_SRC/library/std" ] || {

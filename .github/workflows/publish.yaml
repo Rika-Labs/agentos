@@ -74,6 +74,24 @@ jobs:
           path: packages/runtime-core/commands
           if-no-files-found: error
 
+  codex-wasm:
+    needs: verify-publisher
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-03-01
+          components: rust-src
+          targets: wasm32-wasip1
+      - run: sudo apt-get update && sudo apt-get install --yes cmake
+      - run: make -C toolchain codex
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-wasm
+          path: software/codex/wasm
+          if-no-files-found: error
+
   native-linux:
     needs: verify-publisher
     runs-on: ubuntu-latest
@@ -114,7 +132,7 @@ jobs:
           if-no-files-found: error
 
   npm:
-    needs: [verify-publisher, wasm, native-linux]
+    needs: [verify-publisher, wasm, codex-wasm, native-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -134,6 +152,10 @@ jobs:
         with:
           name: wasm-commands
           path: packages/runtime-core/commands
+      - uses: actions/download-artifact@v4
+        with:
+          name: codex-wasm
+          path: software/codex/wasm
       - name: Restore software command staging
         run: |
           mkdir -p toolchain/target/wasm32-wasip1/release/commands
@@ -156,7 +178,7 @@ jobs:
           AGENTOS_SKIP_NATIVE_META_BUILD: "1"
         run: |
           pnpm --filter=publish exec tsx src/ci/bin.ts bump-versions --version "$RELEASE_VERSION" --version-only
-          npx turbo build --filter='!@rivet-dev/agentos-browser' --filter='!@rivet-dev/agentos-runtime-browser' --filter='!@rivet-dev/agentos-playground' --filter='!@agentos-software/codex' --filter='!./examples/*' --filter='!./examples/quickstart/*'
+          npx turbo build --filter='!@rivet-dev/agentos-browser' --filter='!@rivet-dev/agentos-runtime-browser' --filter='!@rivet-dev/agentos-playground' --filter='!./examples/*' --filter='!./examples/quickstart/*'
           pnpm --filter=publish exec tsx src/ci/bin.ts bump-versions --version "$RELEASE_VERSION" --repository Rika-Labs/agentos
       - name: Exercise matching native build with Node and Bun
         env:
