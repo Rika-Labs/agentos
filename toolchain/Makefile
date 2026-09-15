@@ -97,7 +97,11 @@ AGENTOS_ROOT := $(abspath $(CURDIR)/..)
 CODEX_REF := $(shell cat $(CURDIR)/codex-ref 2>/dev/null)
 CODEX_REPO ?=
 CODEX_WASI_SDK_DIR := $(abspath $(CURDIR)/c/vendor/wasi-sdk)
-codex: c/vendor/wasi-sdk/bin/clang c/sysroot/lib/wasm32-wasi/libc.a
+# codex's build-std compile needs the patched std: the tokio wasi companion
+# (Into<OwnedFd> on ChildStd*) requires the os/wasi/process.rs traits that
+# patch-std installs into the toolchain's rust-src. Upstream's self-hosted
+# runner had this pre-applied; cold runners must run patch-std first.
+codex: c/vendor/wasi-sdk/bin/clang c/sysroot/lib/wasm32-wasi/libc.a patch-std
 ifeq ($(strip $(CODEX_REPO)),)
 	@echo "codex: reproducible build from pin $(CODEX_REF)"
 	@WASI_SDK_DIR="$(CODEX_WASI_SDK_DIR)" \
