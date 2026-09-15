@@ -5,6 +5,7 @@ import {
 	type AgentOsLimits,
 	AgentOsSidecar,
 	type AgentOsSidecarRuntimeConfig,
+	type AgentOsSidecarTerminationResult,
 	agentOsLimitsSchema,
 	agentOsOptionsSchema,
 	binding,
@@ -50,6 +51,7 @@ import {
 	TimerScheduleDriver,
 	type TimingMitigation,
 	validateBindings,
+	type WriteFileOptions,
 } from "../src/index.js";
 
 describe("root public API exports", () => {
@@ -122,6 +124,7 @@ describe("root public API exports", () => {
 	test("re-exports current public SDK types from the root entrypoint", () => {
 		void (null as AgentOsLimits | null);
 		void (null as AgentOsSidecarRuntimeConfig | null);
+		void (null as AgentOsSidecarTerminationResult | null);
 		void (null as ContextDescriptor | null);
 		void (null as ExecOptions | null);
 		void (null as HostDirMountPluginConfig | null);
@@ -143,6 +146,7 @@ describe("root public API exports", () => {
 		void (null as StdioChannel | null);
 		void (null as SpawnOptions | null);
 		void (null as TimingMitigation | null);
+		void (null as WriteFileOptions | null);
 
 		expect(true).toBe(true);
 	});

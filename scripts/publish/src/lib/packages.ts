@@ -18,6 +18,7 @@ export interface Package {
 	dir: string;
 	/** Directory relative to repo root. */
 	relDir: string;
+	publishPath?: string;
 }
 
 export interface DiscoverPackagesOptions {
@@ -128,6 +129,7 @@ export function discoverPackages(
 ): Package[] {
 	const packages: Package[] = [];
 	const seen = new Set<string>();
+	const platformPackageRoots = new Set<string>();
 
 	const add = (dir: string) => {
 		const absDir = resolve(dir);
@@ -153,9 +155,10 @@ export function discoverPackages(
 		const npmDir = join(repoRoot, packageDir);
 		if (existsSync(npmDir)) {
 			for (const entry of readdirSync(npmDir).sort()) {
-				if (!platformAllowlist.has(entry)) continue;
 				const platDir = join(npmDir, entry);
 				if (!statSync(platDir).isDirectory()) continue;
+				platformPackageRoots.add(resolve(platDir));
+				if (!platformAllowlist.has(entry)) continue;
 				add(platDir);
 			}
 		}
@@ -176,6 +179,7 @@ export function discoverPackages(
 	}> = JSON.parse(pnpmList);
 	for (const p of workspacePkgs) {
 		if (!p.name) continue;
+		if (platformPackageRoots.has(resolve(p.path))) continue;
 		if (
 			!p.name.startsWith("@rivet-dev/agentos-") &&
 			p.name !== "@rivet-dev/agentos" &&
@@ -233,10 +237,7 @@ export function assertDiscoverySanity(packages: Package[]): void {
 		);
 	}
 	if (byName.has("@rivet-dev/agentos-apps")) {
-		required.push(
-			"@agentos-software/apps-builder",
-			"@agentos-software/sh",
-		);
+		required.push("@agentos-software/apps-builder", "@agentos-software/sh");
 	}
 	const missing = required.filter((r) => !byName.has(r));
 	if (missing.length > 0) {

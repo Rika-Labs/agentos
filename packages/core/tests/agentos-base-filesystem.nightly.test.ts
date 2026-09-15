@@ -107,18 +107,18 @@ describe("AgentOs base filesystem", () => {
 	});
 
 	test("read-only roots preseed WASM command stubs before runtime mount", async () => {
-			await vm.dispose();
-			vm = await AgentOs.create({
-				software: [coreutils],
-				rootFilesystem: {
-					mode: "read-only",
-					disableDefaultBaseLayer: true,
-				},
-			});
+		await vm.dispose();
+		vm = await AgentOs.create({
+			software: [coreutils],
+			rootFilesystem: {
+				mode: "read-only",
+				disableDefaultBaseLayer: true,
+			},
+		});
 
-			expect(await vm.exists("/bin/sh")).toBe(true);
-			expect(await vm.exists("/bin/ls")).toBe(true);
-			expect(await vm.exists("/bin/env")).toBe(true);
+		expect(await vm.exists("/bin/sh")).toBe(true);
+		expect(await vm.exists("/bin/ls")).toBe(true);
+		expect(await vm.exists("/bin/env")).toBe(true);
 	});
 
 	test("read-only roots preserve software-declared alias commands on the sidecar path", async () => {
@@ -185,7 +185,9 @@ describe("AgentOs base filesystem", () => {
 		expect(updatedStat.mtimeMs).toBe(mtime);
 
 		await vfs.symlink("/tmp/original.txt", "/tmp/alias.txt");
-		expect(await vfs.realpath("/tmp/alias.txt")).toBe("/tmp/original.txt");
+		expect(await vm.filesystem.realpath("/tmp/alias.txt")).toBe(
+			"/tmp/original.txt",
+		);
 
 		await vm.remove("/tmp/original.txt");
 		expect(textDecoder.decode(await vm.readFile("/tmp/linked.txt"))).toBe(
@@ -193,9 +195,47 @@ describe("AgentOs base filesystem", () => {
 		);
 	});
 
+	test("filesystem writeFile exclusively creates one file with the requested mode", async () => {
+		const attempts = await Promise.allSettled(
+			Array.from({ length: 16 }, (_, index) =>
+				vm.filesystem.writeFile("/tmp/exclusive.txt", `writer-${index}`, {
+					flag: "wx",
+					mode: 0o600,
+				}),
+			),
+		);
+
+		expect(
+			attempts.filter((attempt) => attempt.status === "fulfilled"),
+		).toHaveLength(1);
+		expect((await vm.filesystem.stat("/tmp/exclusive.txt")).mode & 0o777).toBe(
+			0o600,
+		);
+		expect(
+			textDecoder.decode(await vm.filesystem.readFile("/tmp/exclusive.txt")),
+		).toMatch(/^writer-\d+$/);
+		expect(
+			(await vm.filesystem.readdir("/tmp")).filter((name) =>
+				name.startsWith(".exclusive.txt."),
+			),
+		).toEqual([]);
+		await expect(
+			vm.filesystem.writeFile("/tmp/exclusive.txt", "replacement", {
+				exclusive: true,
+			}),
+		).rejects.toThrow();
+		expect(
+			(await vm.filesystem.readdir("/tmp")).filter((name) =>
+				name.startsWith(".exclusive.txt."),
+			),
+		).toEqual([]);
+	});
+
 	test("snapshotRootFilesystem exports a reusable lower snapshot", async () => {
 		await vm.writeFile("/home/agentos/snap.txt", "snapshotted");
-		const snapshot = await vm.exportRootFilesystem({ maxBytes: 64 * 1024 * 1024 });
+		const snapshot = await vm.exportRootFilesystem({
+			maxBytes: 64 * 1024 * 1024,
+		});
 
 		const secondVm = await AgentOs.create({
 			rootFilesystem: {

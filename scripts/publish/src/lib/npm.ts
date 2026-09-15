@@ -11,7 +11,10 @@
  * rewritten to literal versions by `bumpPackageJsons` (full mode) before this
  * runs, so plain `npm publish` resolves them correctly.
  */
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { assertRikaNpmPackages, releasePackageName } from "./fork.js";
 import { scoped } from "./logger.js";
 import {
 	assertDiscoverySanity,
@@ -38,6 +41,7 @@ export interface PublishAllOptions {
 	releaseMode?: boolean;
 	/** Pass `--dry-run` to npm publish (local verification, publishes nothing). */
 	dryRun?: boolean;
+	expectedScope?: string;
 }
 
 export type PublishStatus =
@@ -62,6 +66,39 @@ export interface PublishSummary {
 		failed: number;
 	};
 	elapsedSeconds: number;
+}
+
+export async function preflightForkPublication(
+	packages: Package[],
+	registry = "https://registry.npmjs.org",
+): Promise<void> {
+	const existing: string[] = [];
+	for (const pkg of packages) {
+		if (!pkg.publishPath)
+			throw new Error(`missing final packed artifact for ${pkg.name}`);
+		const packageJson = JSON.parse(
+			execFileSync("tar", ["-xOf", pkg.publishPath, "package/package.json"], {
+				encoding: "utf8",
+			}),
+		) as { version?: string };
+		if (!packageJson.version)
+			throw new Error(`${pkg.name} has no packed version`);
+		const response = await fetch(
+			`${registry.replace(/\/$/, "")}/${pkg.name.replace("/", "%2f")}/${encodeURIComponent(packageJson.version)}`,
+		);
+		if (response.status === 404) continue;
+		if (!response.ok) {
+			throw new Error(
+				`npm registry lookup failed for ${pkg.name}@${packageJson.version}: ${response.status} ${response.statusText}`,
+			);
+		}
+		existing.push(`${pkg.name}@${packageJson.version}`);
+	}
+	if (existing.length > 0) {
+		throw new Error(
+			`refusing fork release because ${existing.join(", ")} already exists; publish all artifacts with a new version`,
+		);
+	}
 }
 
 const ALREADY_PUBLISHED_PATTERNS = [
@@ -110,7 +147,20 @@ function runNpmPublish(
 	dryRun: boolean,
 ): Promise<{ code: number; output: string }> {
 	return new Promise((resolvePromise) => {
-		const args = ["publish", "--access", "public", "--tag", tag];
+		const args = [
+			"publish",
+			...(pkg.publishPath
+				? [
+						pkg.publishPath,
+						"--ignore-scripts",
+						"--registry=https://registry.npmjs.org",
+					]
+				: []),
+			"--access",
+			"public",
+			"--tag",
+			tag,
+		];
 		if (dryRun) args.push("--dry-run");
 		const child = spawn("npm", args, {
 			cwd: pkg.dir,
@@ -133,7 +183,7 @@ async function publishOne(
 	pkg: Package,
 	opts: Required<
 		Pick<PublishAllOptions, "tag" | "retries" | "initialBackoffMs" | "dryRun">
-	>,
+	> & { collisionIsFailure: boolean },
 ): Promise<PublishResult> {
 	for (let attempt = 1; attempt <= opts.retries + 1; attempt++) {
 		const { code, output } = await runNpmPublish(pkg, opts.tag, opts.dryRun);
@@ -145,6 +195,15 @@ async function publishOne(
 			};
 		}
 		if (isAlreadyPublished(output)) {
+			if (opts.collisionIsFailure) {
+				return {
+					pkg,
+					status: "failed",
+					attempts: attempt,
+					lastError:
+						"version appeared after fork publication preflight; use a new version",
+				};
+			}
 			return { pkg, status: "already-exists", attempts: attempt };
 		}
 		if (!isRetryable(output) || attempt > opts.retries) {
@@ -156,7 +215,9 @@ async function publishOne(
 			};
 		}
 		const delay = opts.initialBackoffMs * 2 ** (attempt - 1);
-		log.info(`  [retry ${attempt}/${opts.retries}] ${pkg.name} — waiting ${delay}ms`);
+		log.info(
+			`  [retry ${attempt}/${opts.retries}] ${pkg.name} — waiting ${delay}ms`,
+		);
 		await new Promise((r) => setTimeout(r, delay));
 	}
 	return { pkg, status: "failed", attempts: opts.retries + 1 };
@@ -189,8 +250,41 @@ export async function publishAll(
 	const tag = opts.tag;
 	const dryRun = opts.dryRun ?? false;
 
-	const packages = discoverPackages(repoRoot);
-	assertDiscoverySanity(packages);
+	const sourcePackages = discoverPackages(repoRoot);
+	assertDiscoverySanity(sourcePackages);
+	const packages =
+		opts.expectedScope === "@rikalabs"
+			? sourcePackages.map((pkg) => ({
+					...pkg,
+					name: releasePackageName(pkg.name),
+				}))
+			: sourcePackages;
+	if (opts.expectedScope) {
+		const outside = packages.filter(
+			(pkg) => !pkg.name.startsWith(`${opts.expectedScope}/`),
+		);
+		if (outside.length > 0) {
+			throw new Error(
+				`refusing to publish outside ${opts.expectedScope}: ${outside.map((pkg) => pkg.name).join(", ")}`,
+			);
+		}
+		if (opts.expectedScope === "@rikalabs") {
+			assertRikaNpmPackages(repoRoot);
+			const manifest = JSON.parse(
+				readFileSync(join(repoRoot, "target/rika-npm/manifest.json"), "utf8"),
+			) as Record<string, string>;
+			for (const pkg of packages) {
+				const path = manifest[pkg.name];
+				if (!path)
+					throw new Error(`missing final packed artifact for ${pkg.name}`);
+				pkg.publishPath = join(repoRoot, "target/rika-npm", path);
+			}
+		}
+	}
+	const forkPublication = opts.expectedScope === "@rikalabs" && !dryRun;
+	if (forkPublication) {
+		await preflightForkPublication(packages);
+	}
 
 	log.info(
 		`publishing ${packages.length} packages | tag=${tag} | parallel=${parallel} | retries=${retries}${dryRun ? " | DRY RUN" : ""}`,
@@ -209,6 +303,7 @@ export async function publishAll(
 				retries,
 				initialBackoffMs,
 				dryRun,
+				collisionIsFailure: forkPublication,
 			});
 			printResult(result);
 			results.push(result);
