@@ -14,6 +14,11 @@ try {
 			const vm = await AgentOs.create({
 				sidecar: { kind: "explicit", handle: sidecar },
 				database: { type: "sqlite_file", path: join(root, "vm.sqlite") },
+				// host_dir mounts project every entry as the fixed guest-visible
+				// identity 0:0; a root guest matches that ownership so kernel DAC
+				// allows writes (upstream default-uid guests cannot write host_dir
+				// mounts — rivet-dev/agentos#1872).
+				user: { uid: 0, gid: 0, username: "root" },
 				mounts: [{
 					path: "/workspace",
 					plugin: { id: "host_dir", config: { hostPath: directory, readOnly: false } },

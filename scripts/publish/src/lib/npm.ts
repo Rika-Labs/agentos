@@ -14,7 +14,11 @@
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { assertRikaNpmPackages, releasePackageName } from "./fork.js";
+import {
+	assertRikaNpmPackages,
+	releasePackageName,
+	rikaPackages,
+} from "./fork.js";
 import { scoped } from "./logger.js";
 import {
 	assertDiscoverySanity,
@@ -254,7 +258,7 @@ export async function publishAll(
 	assertDiscoverySanity(sourcePackages);
 	const packages =
 		opts.expectedScope === "@rikalabs"
-			? sourcePackages.map((pkg) => ({
+			? rikaPackages(repoRoot).map((pkg) => ({
 					...pkg,
 					name: releasePackageName(pkg.name),
 				}))
