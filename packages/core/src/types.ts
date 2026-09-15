@@ -8,6 +8,7 @@ export type {
 	AgentOsSidecarConfig,
 	AgentOsSidecarDescription,
 	AgentOsSidecarRuntimeConfig,
+	AgentOsSidecarTerminationResult,
 	AgentRegistryEntry,
 	AgentRestartOutcome,
 	AgentStderrEvent,
@@ -42,6 +43,7 @@ export type {
 	ShellData,
 	ShellExit,
 	ShellOptions,
+	WriteFileOptions,
 } from "./agent-os.js";
 export type {
 	CodeEvaluationResult,

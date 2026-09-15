@@ -379,6 +379,12 @@ export interface ReaddirRecursiveOptions {
 	exclude?: string[];
 }
 
+export interface WriteFileOptions {
+	flag?: "w" | "wx";
+	exclusive?: boolean;
+	mode?: number;
+}
+
 /** Entry for batch write operations. */
 export interface BatchWriteEntry {
 	path: string;
@@ -508,6 +514,10 @@ export interface AgentOsSidecarDescription {
 	placement: AgentOsSidecarPlacement;
 	state: "ready" | "disposing" | "disposed";
 	activeVmCount: number;
+}
+
+export interface AgentOsSidecarTerminationResult {
+	cleanupErrors: string[];
 }
 
 interface InProcessSidecarVmAdmin {
@@ -3078,6 +3088,7 @@ export class AgentOs {
 	readonly filesystem = {
 		readFile: this._readFile.bind(this),
 		writeFile: this._writeFile.bind(this),
+		realpath: this._realpath.bind(this),
 		readFiles: this._readFiles.bind(this),
 		writeFiles: this._writeFiles.bind(this),
 		stat: this._stat.bind(this),
@@ -4763,9 +4774,36 @@ export class AgentOs {
 	private async _writeFile(
 		path: string,
 		content: string | Uint8Array,
+		options?: WriteFileOptions,
 	): Promise<void> {
 		this._assertWritableAbsolutePath(path);
-		return this.#kernel.writeFile(path, content);
+		if (options?.flag !== "wx" && options?.exclusive !== true) {
+			await this.#kernel.writeFile(path, content);
+			if (options?.mode !== undefined)
+				await this._vfs().chmod(path, options.mode);
+			return;
+		}
+		const separator = path.lastIndexOf("/");
+		const temporary = `${path.slice(0, separator + 1)}.${path.slice(separator + 1)}.${randomUUID()}`;
+		const fs = this._vfs();
+		await fs.writeFile(temporary, content);
+		try {
+			if (options.mode !== undefined) await fs.chmod(temporary, options.mode);
+			await fs.link(temporary, path);
+		} catch (error) {
+			try {
+				await fs.removeFile(temporary);
+			} catch (cleanupError) {
+				throw new AggregateError([error, cleanupError]);
+			}
+			throw error;
+		}
+		await fs.removeFile(temporary);
+	}
+
+	private async _realpath(path: string): Promise<string> {
+		this._assertSafeAbsolutePath(path);
+		return this._vfs().realpath(path);
 	}
 
 	private async _writeFiles(
@@ -4977,8 +5015,12 @@ export class AgentOs {
 	}
 
 	/** @deprecated Use `filesystem.writeFile()`. */
-	writeFile(path: string, content: string | Uint8Array): Promise<void> {
-		return this.filesystem.writeFile(path, content);
+	writeFile(
+		path: string,
+		content: string | Uint8Array,
+		options?: WriteFileOptions,
+	): Promise<void> {
+		return this.filesystem.writeFile(path, content, options);
 	}
 
 	/** @deprecated Use `filesystem.writeFiles()`. */
@@ -6913,6 +6955,8 @@ interface AgentOsSidecarState {
 	runtime: AgentOsSidecarRuntimeConfig;
 	activeLeases: Set<AgentOsSidecarLeaseRecord>;
 	sharedPool?: string;
+	nativeClient?: SidecarProcess;
+	termination?: Promise<AgentOsSidecarTerminationResult>;
 	/**
 	 * The single native sidecar process shared by every VM leased from this
 	 * handle. Spawned lazily on first VM creation and reused thereafter so VMs
@@ -7058,6 +7102,11 @@ function ensureSharedSidecarNativeProcess(
 	sidecar: AgentOsSidecar,
 ): Promise<SharedSidecarNativeProcess> {
 	const state = getSidecarState(sidecar);
+	if (state.description.state !== "ready") {
+		throw new Error(
+			`Cannot start native process while sidecar is ${state.description.state}`,
+		);
+	}
 	if (!state.nativeProcess) {
 		ensureSidecarProcessExitCleanup();
 		state.nativeProcess = (async () => {
@@ -7066,6 +7115,7 @@ function ensureSharedSidecarNativeProcess(
 				command: ensureNativeSidecarBinary(),
 				args: sidecarRuntimeArgs(state.runtime),
 			});
+			state.nativeClient = client;
 			// Track the child immediately — BEFORE the handshake await — so a
 			// failed `authenticateAndOpenSession()` can still reap it (otherwise
 			// the spawned child is untracked, unreapable, and pins the loop).
@@ -7087,14 +7137,19 @@ function ensureSharedSidecarNativeProcess(
 				const session = await client.authenticateAndOpenSession();
 				return { client, session };
 			} catch (error) {
-				// Spawn/handshake failed: reap the child, drop the cached handle,
-				// and CLEAR the rejected promise so the next create() retries
-				// instead of permanently wedging on a rejected `nativeProcess`.
+				if (state.description.state === "ready")
+					state.description.state = "disposing";
 				try {
-					state.sharedChild?.kill?.("SIGKILL");
-				} catch {
-					// already gone
+					const result = await client.terminate();
+					for (const detail of result.cleanupErrors)
+						console.warn("[agentos] startup cleanup:", detail);
+				} catch (cleanupError) {
+					throw new AggregateError(
+						[error, cleanupError],
+						"Sidecar startup failed; termination remains unconfirmed",
+					);
 				}
+				state.nativeClient = undefined;
 				state.sharedChild = undefined;
 				state.nativeProcess = undefined;
 				throw error;
@@ -7108,10 +7163,12 @@ function ensureSharedSidecarNativeProcess(
 async function disposeSharedSidecarNativeProcess(
 	state: AgentOsSidecarState,
 ): Promise<void> {
-	const pending = state.nativeProcess;
-	if (!pending) {
+	const client = state.nativeClient;
+	if (!client) {
 		return;
 	}
+	await client.dispose();
+	state.nativeClient = undefined;
 	state.nativeProcess = undefined;
 	// The cached child is now dead; drop it (symmetric with the assignment in
 	// ensureSharedSidecarNativeProcess). We deliberately do NOT zero
@@ -7121,12 +7178,6 @@ async function disposeSharedSidecarNativeProcess(
 	// zeroing a shared counter could clobber a hold on a freshly re-acquired
 	// process generation, so it is left to the balanced acquire/release pairs.
 	state.sharedChild = undefined;
-	try {
-		const { client } = await pending;
-		await client.dispose();
-	} catch {
-		// Process may have already exited; nothing to reclaim.
-	}
 }
 
 export class AgentOsSidecar {
@@ -7154,7 +7205,46 @@ export class AgentOsSidecar {
 		return cloneSidecarDescription(state.description);
 	}
 
+	terminate(): Promise<AgentOsSidecarTerminationResult> {
+		const state = getSidecarState(this);
+		if (state.sharedPool)
+			return Promise.reject(new Error("Cannot terminate a shared sidecar"));
+		if (state.termination !== undefined) return state.termination;
+		state.description.state = "disposing";
+		state.termination = this.terminateOwnedProcess(state).catch((error) => {
+			state.termination = undefined;
+			throw error;
+		});
+		return state.termination;
+	}
+
+	private async terminateOwnedProcess(
+		state: AgentOsSidecarState,
+	): Promise<AgentOsSidecarTerminationResult> {
+		const result = state.nativeClient
+			? await state.nativeClient.terminate()
+			: { cleanupErrors: [] };
+		state.nativeClient = undefined;
+		state.nativeProcess = undefined;
+		state.sharedChild = undefined;
+		await this.disposeResources().catch((error) =>
+			result.cleanupErrors.push(String(error)),
+		);
+		return result;
+	}
+
 	async dispose(): Promise<void> {
+		const termination = getSidecarState(this).termination;
+		if (termination !== undefined) {
+			const result = await termination;
+			if (result.cleanupErrors.length)
+				throw new Error(result.cleanupErrors.join("; "));
+			return;
+		}
+		return this.disposeResources();
+	}
+
+	private async disposeResources(): Promise<void> {
 		const state = getSidecarState(this);
 		if (state.description.state === "disposed") {
 			return;
@@ -7313,6 +7403,7 @@ async function leaseAgentOsSidecarVm<TVmAdmin extends InProcessSidecarVmAdmin>(
 	};
 
 	let disposed = false;
+	let disposal: Promise<void> | undefined;
 	let leaseRecord: AgentOsSidecarLeaseRecord | undefined;
 
 	try {
@@ -7320,6 +7411,11 @@ async function leaseAgentOsSidecarVm<TVmAdmin extends InProcessSidecarVmAdmin>(
 			placement: cloneSidecarPlacement(state.description.placement),
 		});
 		const vm = await session.createVm();
+		if (state.description.state !== "ready") {
+			throw new Error(
+				`Cannot finish VM creation while sidecar is ${state.description.state}`,
+			);
+		}
 		const admin = transport?.getVmAdmin(vm.vmId);
 		if (!admin) {
 			throw new Error(`Sidecar VM admin was not registered for ${vm.vmId}`);
@@ -7331,17 +7427,21 @@ async function leaseAgentOsSidecarVm<TVmAdmin extends InProcessSidecarVmAdmin>(
 			vm,
 			admin,
 			async dispose() {
-				if (disposed) {
-					return;
-				}
-				disposed = true;
-				state.activeLeases.delete(leaseRecord!);
-				state.description.activeVmCount = state.activeLeases.size;
-				await client.dispose();
-				// Release this lease's hold; the shared sidecar is unref'd only
-				// once the last hold (across all in-flight + active leases) drops,
-				// so a one-shot host process can then exit on its own.
-				releaseHold();
+				if (disposed) return;
+				if (disposal) return disposal;
+				disposal = client.dispose().then(
+					() => {
+						disposed = true;
+						if (leaseRecord) state.activeLeases.delete(leaseRecord);
+						state.description.activeVmCount = state.activeLeases.size;
+						releaseHold();
+					},
+					(error) => {
+						disposal = undefined;
+						throw error;
+					},
+				);
+				return disposal;
 			},
 		};
 
@@ -7366,6 +7466,7 @@ async function createInProcessSidecarTransport<
 ): Promise<InProcessSidecarTransport<TVmAdmin>> {
 	const vmAdmins = new Map<string, TVmAdmin>();
 	let disposed = false;
+	let disposal: Promise<void> | undefined;
 
 	async function disposeVmAdmin(vmId: string): Promise<void> {
 		const admin = vmAdmins.get(vmId);
@@ -7373,8 +7474,8 @@ async function createInProcessSidecarTransport<
 			return;
 		}
 
-		vmAdmins.delete(vmId);
 		await admin.dispose();
+		vmAdmins.delete(vmId);
 	}
 
 	return {
@@ -7394,25 +7495,27 @@ async function createInProcessSidecarTransport<
 		},
 
 		async dispose() {
-			if (disposed) {
-				return;
-			}
-			disposed = true;
-
-			const errors: Error[] = [];
-			for (const vmId of [...vmAdmins.keys()]) {
-				try {
-					await disposeVmAdmin(vmId);
-				} catch (error) {
-					errors.push(
-						error instanceof Error ? error : new Error(String(error)),
-					);
+			if (disposed) return;
+			if (disposal) return disposal;
+			disposal = Promise.allSettled(
+				[...vmAdmins.keys()].map((vmId) => disposeVmAdmin(vmId)),
+			).then((results) => {
+				const errors = results.flatMap((result) =>
+					result.status === "rejected"
+						? [
+								result.reason instanceof Error
+									? result.reason
+									: new Error(String(result.reason)),
+							]
+						: [],
+				);
+				if (errors.length > 0) {
+					disposal = undefined;
+					throw new Error(errors.map((error) => error.message).join("; "));
 				}
-			}
-
-			if (errors.length > 0) {
-				throw new Error(errors.map((error) => error.message).join("; "));
-			}
+				disposed = true;
+			});
+			return disposal;
 		},
 
 		getVmAdmin(vmId) {

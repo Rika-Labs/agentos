@@ -10,7 +10,10 @@ import type {
 	ProtocolFramePayloadCodec,
 } from "./protocol-frames.js";
 import type { LiveRequestPayload } from "./request-payloads.js";
-import type { SidecarProcessTransport } from "./sidecar-client.js";
+import type {
+	SidecarProcessTransport,
+	SidecarTerminationResult,
+} from "./sidecar-client.js";
 import { registerSidecarProcessSpawnFactory } from "./sidecar-process.js";
 
 export const DEFAULT_SIDECAR_EVENT_BUFFER_CAPACITY = 4_096;
@@ -53,6 +56,7 @@ export class StdioSidecarProtocolClient implements SidecarProcessTransport {
 	private readonly gracefulExitMs: number;
 	private readonly forceExitMs: number;
 	private readonly disposedErrorMessage: string;
+	private termination?: Promise<SidecarTerminationResult>;
 
 	private constructor(
 		sidecarProcess: StdioSidecarProcess,
@@ -162,6 +166,30 @@ export class StdioSidecarProtocolClient implements SidecarProcessTransport {
 		return await this.protocolClient.waitForEvent(matcher, timeoutMs, options);
 	}
 
+	terminate(): Promise<SidecarTerminationResult> {
+		if (this.termination !== undefined) return this.termination;
+		this.termination = this.terminateOwnedProcess().catch((error) => {
+			this.termination = undefined;
+			throw error;
+		});
+		return this.termination;
+	}
+
+	private async terminateOwnedProcess(): Promise<SidecarTerminationResult> {
+		if (this.child.exitCode === null && this.child.signalCode === null) {
+			this.child.kill("SIGKILL");
+			await this.sidecarProcess.waitForExit(this.forceExitMs);
+		}
+		if (this.child.exitCode === null && this.child.signalCode === null) {
+			throw new Error(
+				`sidecar termination was not confirmed within ${this.forceExitMs}ms`,
+			);
+		}
+		const cleanupErrors: string[] = [];
+		await this.dispose().catch((error) => cleanupErrors.push(String(error)));
+		return { cleanupErrors };
+	}
+
 	async dispose(): Promise<void> {
 		let shutdownError: Error | null = null;
 		try {
@@ -196,6 +224,11 @@ export class StdioSidecarProtocolClient implements SidecarProcessTransport {
 			await this.sidecarProcess.waitForExit(this.forceExitMs);
 		}
 
+		if (this.child.exitCode === null && this.child.signalCode === null) {
+			throw new Error(
+				`sidecar termination was not confirmed within ${this.forceExitMs}ms`,
+			);
+		}
 		this.protocolClient.dispose();
 		try {
 			this.child.stdin.destroy();

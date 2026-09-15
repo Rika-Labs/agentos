@@ -3119,11 +3119,11 @@ export class AgentOsSidecarClient {
 			}
 		}
 
-		this.disposed = true;
-
 		if (errors.length > 0) {
 			throw new Error(errors.map((error) => error.message).join("; "));
 		}
+
+		this.disposed = true;
 	}
 
 	private async disposeVmEntry(

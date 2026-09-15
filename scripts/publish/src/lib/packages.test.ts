@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+	DEFAULT_SIDECAR_PLATFORMS,
 	EXCLUDED,
 	LOCKSTEP_SOFTWARE_PACKAGES,
 	assertDiscoverySanity,
@@ -26,6 +27,17 @@ function writeJson(root: string, rel: string, value: unknown) {
 	const path = join(root, rel);
 	mkdirSync(join(path, ".."), { recursive: true });
 	writeFileSync(path, `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+function withSidecarPlatforms(platforms: string, fn: () => void) {
+	const previous = process.env.SIDECAR_PLATFORMS;
+	process.env.SIDECAR_PLATFORMS = platforms;
+	try {
+		fn();
+	} finally {
+		if (previous === undefined) delete process.env.SIDECAR_PLATFORMS;
+		else process.env.SIDECAR_PLATFORMS = previous;
+	}
 }
 
 test("discovers Agent OS sidecar resolver packages", () => {
@@ -53,11 +65,12 @@ test("discovers Agent OS sidecar resolver packages", () => {
 });
 
 test("builds platform map for the agent-os sidecar meta package", () => {
-	const packages = discoverPackages(repoRoot);
-	const names = packages.map((pkg) => pkg.name);
-	const metaMap = buildMetaPlatformMap(packages);
+	withSidecarPlatforms(DEFAULT_SIDECAR_PLATFORMS.join(" "), () => {
+		const packages = discoverPackages(repoRoot);
+		const names = packages.map((pkg) => pkg.name);
+		const metaMap = buildMetaPlatformMap(packages);
 
-	if (names.includes("@rivet-dev/agentos-sidecar")) {
+		if (!names.includes("@rivet-dev/agentos-sidecar")) return;
 		assert.deepEqual(metaMap.get("@rivet-dev/agentos-sidecar"), [
 			"@rivet-dev/agentos-sidecar-darwin-arm64",
 			"@rivet-dev/agentos-sidecar-darwin-x64",
@@ -70,7 +83,19 @@ test("builds platform map for the agent-os sidecar meta package", () => {
 			"@rivet-dev/agentos-runtime-sidecar-linux-arm64-gnu",
 			"@rivet-dev/agentos-runtime-sidecar-linux-x64-gnu",
 		]);
-	}
+	});
+});
+
+test("builds exact optional dependency selections for both Linux sidecar meta packages", () => {
+	withSidecarPlatforms("linux-x64-gnu", () => {
+		const metaMap = buildMetaPlatformMap(discoverPackages(repoRoot));
+		assert.deepEqual(metaMap.get("@rivet-dev/agentos-sidecar"), [
+			"@rivet-dev/agentos-sidecar-linux-x64-gnu",
+		]);
+		assert.deepEqual(metaMap.get("@rivet-dev/agentos-runtime-sidecar"), [
+			"@rivet-dev/agentos-runtime-sidecar-linux-x64-gnu",
+		]);
+	});
 });
 
 test("sanity check passes for the agent-os workspace", () => {
