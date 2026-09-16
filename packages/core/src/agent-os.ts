@@ -2665,7 +2665,8 @@ function executionOutput(
 			"retainEvents is available only for spawned processes; use output.capture for attached runs",
 		);
 	}
-	const capture = options.output?.capture;
+	const capture =
+		options.output?.capture ?? (background ? undefined : "all");
 	return {
 		capture:
 			capture === "all"

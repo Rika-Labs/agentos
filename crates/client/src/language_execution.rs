@@ -59,9 +59,9 @@ pub struct LanguageSpawnOptions {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OutputCapture {
     #[default]
+    All,
     None,
     Stderr,
-    All,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
