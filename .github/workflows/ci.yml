@@ -237,6 +237,22 @@ jobs:
           tar -xzf ci-artifacts/js/agentos-js-dist.tar.gz
           chmod +x ci-artifacts/agentos-sidecar/agentos-sidecar
           node packages/runtime-core/scripts/copy-wasm-commands.mjs --require-coreutils
+          # acp-reactor-regression projects @agentos-software/common, which
+          # bundles eight packages; the pr-commands artifact only carries
+          # coreutils binaries, so the rest pack as placeholders (their
+          # commands are never exec'd in this lane). Software-only filters:
+          # wider closures rebuild runtime-core, whose build:protocol needs
+          # build-tools devDeps outside the filtered install.
+          pnpm --filter @agentos-software/common \
+            --filter @agentos-software/coreutils \
+            --filter @agentos-software/sed \
+            --filter @agentos-software/grep \
+            --filter @agentos-software/gawk \
+            --filter @agentos-software/findutils \
+            --filter @agentos-software/diffutils \
+            --filter @agentos-software/tar \
+            --filter @agentos-software/gzip \
+            build
           pnpm --filter @agentos-software/coreutils build:runtime
       - run: pnpm --dir packages/core test:pr
         env:
