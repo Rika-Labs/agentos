@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SIDECAR_PLATFORMS: linux-x64-gnu
+  SIDECAR_PLATFORMS: "linux-x64-gnu linux-arm64-gnu darwin-x64 darwin-arm64"
   RUST_TOOLCHAIN: "1.91.1"
   LINUX_GNU_LLVM_VERSION: "22"
   LINUX_GNU_SYSROOT_TAG: sysroot-20250207
@@ -94,31 +94,41 @@ jobs:
 
   native-linux:
     needs: verify-publisher
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64-gnu
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - platform: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
         with:
-          name: agentos-linux-x64-gnu
+          name: agentos-${{ matrix.platform }}
       - name: Build with pinned LLVM and compatibility sysroot
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/build/linux-gnu.Dockerfile
           build-args: |
-            TARGET=x86_64-unknown-linux-gnu
+            TARGET=${{ matrix.target }}
             BUILD_PROFILE=release
-            CACHE_PLATFORM=linux-x64-gnu
+            CACHE_PLATFORM=${{ matrix.platform }}
             RUST_TOOLCHAIN=${{ env.RUST_TOOLCHAIN }}
             LINUX_GNU_LLVM_VERSION=${{ env.LINUX_GNU_LLVM_VERSION }}
             LINUX_GNU_SYSROOT_TAG=${{ env.LINUX_GNU_SYSROOT_TAG }}
-          tags: agentos-linux-linux-x64-gnu
+          tags: agentos-linux-${{ matrix.platform }}
           load: true
       - id: extract
         name: Extract matching binaries
         run: |
-          out="target/sidecar-artifacts/linux-x64-gnu"; mkdir -p "$out"
-          cid=$(docker create agentos-linux-linux-x64-gnu)
+          out="target/sidecar-artifacts/${{ matrix.platform }}"; mkdir -p "$out"
+          cid=$(docker create agentos-linux-${{ matrix.platform }})
           docker cp "$cid:/artifacts/agentos-sidecar" "$out/agentos-sidecar"
           docker cp "$cid:/artifacts/agentos-native-sidecar" "$out/agentos-native-sidecar"
           docker rm "$cid"
@@ -127,12 +137,63 @@ jobs:
       - run: scripts/ci/smoke-linux-artifacts.sh binary "${{ steps.extract.outputs.dir }}/agentos-sidecar" "${{ steps.extract.outputs.dir }}/agentos-native-sidecar"
       - uses: actions/upload-artifact@v4
         with:
-          name: sidecar-linux-x64-gnu
+          name: sidecar-${{ matrix.platform }}
           path: ${{ steps.extract.outputs.dir }}
           if-no-files-found: error
 
+  native-darwin:
+    needs: verify-publisher
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-x64
+            target: x86_64-apple-darwin
+            clang: x86_64-apple-darwin20.4
+            expected_arch: x86_64
+          - platform: darwin-arm64
+            target: aarch64-apple-darwin
+            clang: aarch64-apple-darwin20.4
+            expected_arch: arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+        with:
+          name: agentos-${{ matrix.platform }}
+      - name: Cross-compile via osxcross
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/build/darwin.Dockerfile
+          build-args: |
+            TARGET=${{ matrix.target }}
+            CLANG=${{ matrix.clang }}
+            BUILD_PROFILE=release
+            CACHE_PLATFORM=${{ matrix.platform }}
+            RUST_TOOLCHAIN=${{ env.RUST_TOOLCHAIN }}
+          tags: agentos-darwin-${{ matrix.platform }}
+          load: true
+      - name: Extract darwin artifacts
+        run: |
+          set -euo pipefail
+          out="target/sidecar-artifacts/${{ matrix.platform }}"; mkdir -p "$out"
+          cid=$(docker create agentos-darwin-${{ matrix.platform }})
+          docker cp "$cid:/artifacts/agentos-sidecar" "$out/agentos-sidecar"
+          docker cp "$cid:/artifacts/agentos-native-sidecar" "$out/agentos-native-sidecar"
+          docker rm "$cid"
+          test -f "$out/agentos-sidecar"
+          test -f "$out/agentos-native-sidecar"
+          file "$out/agentos-sidecar" | grep -F "${{ matrix.expected_arch }}"
+          file "$out/agentos-native-sidecar" | grep -F "${{ matrix.expected_arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-${{ matrix.platform }}
+          path: target/sidecar-artifacts/${{ matrix.platform }}
+          if-no-files-found: error
+
   npm:
-    needs: [verify-publisher, wasm, codex-wasm, native-linux]
+    needs: [verify-publisher, wasm, codex-wasm, native-linux, native-darwin]
     runs-on: ubuntu-latest
     permissions:
       contents: read
