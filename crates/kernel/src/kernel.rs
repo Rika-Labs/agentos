@@ -9215,7 +9215,9 @@ impl PosixAcl {
             return Err(invalid_acl(path, "unsupported xattr version"));
         }
         let entries = value[4..]
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|bytes| PosixAclEntry {
                 tag: u16::from_le_bytes([bytes[0], bytes[1]]),
                 perm: u16::from_le_bytes([bytes[2], bytes[3]]),
