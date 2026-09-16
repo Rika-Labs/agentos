@@ -228,10 +228,16 @@ jobs:
         with:
           name: agentos-sidecar
           path: ci-artifacts/agentos-sidecar
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-commands
+          path: packages/runtime-core/commands
       - name: Restore runtime inputs
         run: |
           tar -xzf ci-artifacts/js/agentos-js-dist.tar.gz
           chmod +x ci-artifacts/agentos-sidecar/agentos-sidecar
+          node packages/runtime-core/scripts/copy-wasm-commands.mjs --require-coreutils
+          pnpm --filter @agentos-software/coreutils build:runtime
       - run: pnpm --dir packages/core test:pr
         env:
           AGENTOS_SIDECAR_BIN: ${{ github.workspace }}/ci-artifacts/agentos-sidecar/agentos-sidecar
