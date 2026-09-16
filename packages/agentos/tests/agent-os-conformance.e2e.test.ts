@@ -78,7 +78,10 @@ defineAgentOsConformanceSuite({
 				if (typeof method !== "function") {
 					throw new Error(`Actor backend does not implement ${action}`);
 				}
-				return (await method.apply(owner, args)) as T;
+				// RivetKit action methods are Proxies whose get trap resolves nested
+				// action names, so `.apply()` would dispatch an `<action>.apply` call
+				// instead of invoking the method. Direct call is required.
+				return (await method(...args)) as T;
 			},
 			on(
 				event: AgentOsConformanceEvent,

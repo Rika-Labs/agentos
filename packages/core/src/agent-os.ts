@@ -2665,7 +2665,8 @@ function executionOutput(
 			"retainEvents is available only for spawned processes; use output.capture for attached runs",
 		);
 	}
-	const capture = options.output?.capture;
+	const capture =
+		options.output?.capture ?? (background ? undefined : "all");
 	return {
 		capture:
 			capture === "all"
@@ -5007,6 +5008,15 @@ export class AgentOs {
 		await this.#kernel.removePath(path, {
 			recursive: options?.recursive ?? false,
 		});
+	}
+
+	async pread(
+		path: string,
+		offset: number,
+		length: number,
+	): Promise<Uint8Array> {
+		this._assertSafeAbsolutePath(path);
+		return this._vfs().pread(path, offset, length);
 	}
 
 	/** @deprecated Use `filesystem.readFile()`. */
