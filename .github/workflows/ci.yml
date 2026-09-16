@@ -307,6 +307,9 @@ jobs:
           chmod +x ci-artifacts/agentos-sidecar/agentos-sidecar
           node packages/runtime-core/scripts/copy-wasm-commands.mjs --require-coreutils
           pnpm --filter @agentos-software/coreutils build:runtime
+          # rivetkit validates inspector tab sources at registry build; the
+          # bundle is a gitignored artifact so the job must build it first.
+          pnpm --filter @rivet-dev/agentos build:tabs
       - run: pnpm --dir packages/agentos test:pr
         env:
           AGENTOS_SIDECAR_BIN: ${{ github.workspace }}/ci-artifacts/agentos-sidecar/agentos-sidecar

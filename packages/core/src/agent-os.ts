@@ -5009,6 +5009,15 @@ export class AgentOs {
 		});
 	}
 
+	async pread(
+		path: string,
+		offset: number,
+		length: number,
+	): Promise<Uint8Array> {
+		this._assertSafeAbsolutePath(path);
+		return this._vfs().pread(path, offset, length);
+	}
+
 	/** @deprecated Use `filesystem.readFile()`. */
 	readFile(path: string): Promise<Uint8Array> {
 		return this.filesystem.readFile(path);
